@@ -55,7 +55,7 @@ SELECTED_COLUMNS = [
 
 @st.cache_data
 def load_whale_data():
-    file_path = "../day3/fct_biodiversity_sightings.parquet"
+    file_path = "fct_biodiversity_sightings.parquet"
     df_raw = pd.read_parquet(file_path)
     
     existing_cols = [c for c in SELECTED_COLUMNS if c in df_raw.columns]
