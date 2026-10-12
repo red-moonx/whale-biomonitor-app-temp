@@ -577,22 +577,45 @@ elif navigation == "Interactive visualizations":
 
     st.markdown(f"Displaying **{len(filtered_df):,}** filtered sightings.")
 
-    # Tabs for Visualizations
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    # Sub-Navigation for Visualizations (Lazy-loaded to ensure fast render and prevent OOM crash)
+    viz_options = [
         "Global Sightings Map",
         "Latitudinal Migration",
         "Effort by Country",
         "Taxonomic Hierarchy",
         "IUCN Status",
         "Monthly Animation"
-    ])
+    ]
+    
+    if hasattr(st, "segmented_control"):
+        selected_viz = st.segmented_control(
+            "Select Visualization:",
+            viz_options,
+            default=viz_options[0],
+            label_visibility="collapsed"
+        )
+        if not selected_viz:
+            selected_viz = viz_options[0]
+    else:
+        selected_viz = st.radio(
+            "Select Visualization:",
+            viz_options,
+            horizontal=True,
+            label_visibility="collapsed"
+        )
 
-    # Tab 1: Global Sightings Point Map
-    with tab1:
+    # 1. Global Sightings Point Map
+    if selected_viz == "Global Sightings Map":
         st.subheader("Global Cetacea Sightings Map")
         sample_map = filtered_df.dropna(subset=["latitude", "longitude"])
-        if len(sample_map) > 20000:
-            sample_map = sample_map.sample(20000, random_state=42)
+        is_filtered = bool(selected_sp_display or selected_country != "All" or selected_year != "All")
+        map_limit = 30000 if is_filtered else 12000
+        
+        if len(sample_map) > map_limit:
+            st.caption(f"Displaying {map_limit:,} sample points for optimal performance. Filter by species or country to see full localized points.")
+            sample_map = sample_map.sample(map_limit, random_state=42)
+        else:
+            st.caption(f"Displaying all {len(sample_map):,} sightings.")
         
         color_col = "family" if 'family' in sample_map and not selected_sp_display else "species_display"
         
@@ -614,8 +637,8 @@ elif navigation == "Interactive visualizations":
         )
         st.plotly_chart(fig_map, use_container_width=True)
 
-    # Tab 2: Latitudinal Migration Drift
-    with tab2:
+    # 2. Latitudinal Migration Drift
+    elif selected_viz == "Latitudinal Migration":
         st.subheader("Monthly Latitudinal Migration Wave")
         top_7_species = filtered_df['common_name'].value_counts().head(7).index
         df_top7 = filtered_df[filtered_df['common_name'].isin(top_7_species)]
@@ -648,8 +671,8 @@ elif navigation == "Interactive visualizations":
         else:
             st.info("Insufficient data to generate latitudinal migration curve for current selection.")
 
-    # Tab 3: Observer Effort & Methodology Bias
-    with tab3:
+    # 3. Observer Effort & Methodology Bias
+    elif selected_viz == "Effort by Country":
         st.subheader("Observer Effort & Methodology Bias Across Top Countries")
         top_10_countries = filtered_df['country_name'].value_counts().head(10).index
         df_top_c = filtered_df[filtered_df['country_name'].isin(top_10_countries)]
@@ -682,22 +705,26 @@ elif navigation == "Interactive visualizations":
         else:
             st.info("Insufficient methodological data for current selection.")
 
-    # Tab 4: Taxonomic Sunburst
-    with tab4:
+    # 4. Taxonomic Sunburst (Optimized via pre-aggregation)
+    elif selected_viz == "Taxonomic Hierarchy":
         st.subheader("Taxonomic Hierarchy Breakdown: Family ➔ Genus ➔ Ordinary Name")
         df_taxa = filtered_df.dropna(subset=['family_italic', 'genus_italic', 'common_name'])
         if not df_taxa.empty:
+            taxa_grouped = df_taxa.groupby(['family_italic', 'genus_italic', 'common_name']).size().reset_index(name='Sightings')
             fig_sunburst = px.sunburst(
-                df_taxa,
+                taxa_grouped,
                 path=['family_italic', 'genus_italic', 'common_name'],
+                values='Sightings',
                 color='family_italic',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             fig_sunburst.update_layout(height=650, margin=dict(l=0, r=0, t=30, b=0))
             st.plotly_chart(fig_sunburst, use_container_width=True)
+        else:
+            st.info("Insufficient taxonomic data for current selection.")
 
-    # Tab 5: IUCN Conservation Status
-    with tab5:
+    # 5. IUCN Conservation Status
+    elif selected_viz == "IUCN Status":
         st.subheader("Risk Profile & IUCN Red List Status")
         df_iucn = filtered_df.dropna(subset=['iucn_red_list_category'])
         if not df_iucn.empty:
@@ -716,16 +743,25 @@ elif navigation == "Interactive visualizations":
             )
             fig_iucn.update_layout(height=600, margin=dict(l=150, r=50, t=40, b=50))
             st.plotly_chart(fig_iucn, use_container_width=True)
+        else:
+            st.info("Insufficient IUCN status data for current selection.")
 
-    # Tab 6: Animated Migration Map
-    with tab6:
+    # 6. Animated Migration Map
+    elif selected_viz == "Monthly Animation":
         st.subheader("Monthly Cetacea Migration Animation")
         top_species_anim = filtered_df['common_name'].value_counts().head(6).index
         df_anim = filtered_df[filtered_df['common_name'].isin(top_species_anim)].copy()
         
         if not df_anim.empty and 'occurrence_month' in df_anim:
             df_anim = df_anim.sort_values(by='occurrence_month')
-            df_anim_sample = df_anim.sample(min(15000, len(df_anim)), random_state=42) if len(df_anim) > 15000 else df_anim
+            is_filtered = bool(selected_sp_display or selected_country != "All" or selected_year != "All")
+            sample_limit = 10000 if is_filtered else 4000
+            if len(df_anim) > sample_limit:
+                st.caption(f"Displaying {sample_limit:,} sample observations across 12 months for smooth animation playback.")
+                df_anim_sample = df_anim.sample(sample_limit, random_state=42)
+            else:
+                st.caption(f"Displaying all {len(df_anim):,} observations across 12 months.")
+                df_anim_sample = df_anim
             
             fig_anim_map = px.scatter_map(
                 df_anim_sample,
@@ -744,6 +780,8 @@ elif navigation == "Interactive visualizations":
             fig_anim_map.update_traces(marker=dict(size=5))
             fig_anim_map.update_layout(height=600, margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig_anim_map, use_container_width=True)
+        else:
+            st.info("Insufficient temporal data for animation.")
 
 
 # --- PAGE 3: DATA EXPLORER ---
