@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from copy import deepcopy
+import gc
+import time
 from plotly.subplots import make_subplots
 
 # Set default Plotly theme to light white
@@ -90,11 +91,16 @@ def load_whale_data():
 
     df_clean['country_display'] = df_clean['country_name'] + " (" + df_clean['country_code'] + ")"
 
+    # Optimize memory footprint by downcasting coordinate floats to float32
+    if 'latitude' in df_clean:
+        df_clean['latitude'] = df_clean['latitude'].astype('float32')
+    if 'longitude' in df_clean:
+        df_clean['longitude'] = df_clean['longitude'].astype('float32')
+
     return df_clean
 
-# Load raw dataset once into cache
-df_clean_raw = load_whale_data()
-df_clean = deepcopy(df_clean_raw)
+# Load raw dataset directly into cache without wasteful deepcopy duplication
+df_clean = load_whale_data()
 
 # --- SIDEBAR NAVIGATION ---
 st.sidebar.title("🐋 Whale BioMonitor")
@@ -566,8 +572,8 @@ elif navigation == "Interactive visualizations":
     else:
         selected_year = "All"
 
-    # Filter dataset
-    filtered_df = df_clean.copy()
+    # Filter dataset efficiently (avoid full copy unless subset is filtered)
+    filtered_df = df_clean
     if selected_sp_display:
         filtered_df = filtered_df[filtered_df['species_display'].isin(selected_sp_display)]
     if selected_country != "All":
@@ -604,12 +610,22 @@ elif navigation == "Interactive visualizations":
             label_visibility="collapsed"
         )
 
+    # Cooldown & Memory Cleanup on fast tab switching
+    if 'active_tab_tracker' not in st.session_state:
+        st.session_state['active_tab_tracker'] = selected_viz
+
+    if selected_viz != st.session_state['active_tab_tracker']:
+        st.session_state['active_tab_tracker'] = selected_viz
+        # Gentle pacing sleep to let any pending render threads settle and reclaim memory
+        time.sleep(0.3)
+        gc.collect()
+
     # 1. Global Sightings Point Map
     if selected_viz == "Global Sightings Map":
         st.subheader("Global Cetacea Sightings Map")
         sample_map = filtered_df.dropna(subset=["latitude", "longitude"])
         is_filtered = bool(selected_sp_display or selected_country != "All" or selected_year != "All")
-        map_limit = 30000 if is_filtered else 12000
+        map_limit = 25000 if is_filtered else 8000
         
         if len(sample_map) > map_limit:
             st.caption(f"Displaying {map_limit:,} sample points for optimal performance. Filter by species or country to see full localized points.")
@@ -636,6 +652,7 @@ elif navigation == "Interactive visualizations":
             legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5)
         )
         st.plotly_chart(fig_map, use_container_width=True)
+        gc.collect()
 
     # 2. Latitudinal Migration Drift
     elif selected_viz == "Latitudinal Migration":
@@ -749,39 +766,50 @@ elif navigation == "Interactive visualizations":
     # 6. Animated Migration Map
     elif selected_viz == "Monthly Animation":
         st.subheader("Monthly Cetacea Migration Animation")
-        top_species_anim = filtered_df['common_name'].value_counts().head(6).index
-        df_anim = filtered_df[filtered_df['common_name'].isin(top_species_anim)].copy()
+        st.caption("Month-by-month latitudinal migration animation across the 12 calendar months.")
         
-        if not df_anim.empty and 'occurrence_month' in df_anim:
-            df_anim = df_anim.sort_values(by='occurrence_month')
-            is_filtered = bool(selected_sp_display or selected_country != "All" or selected_year != "All")
-            sample_limit = 10000 if is_filtered else 4000
-            if len(df_anim) > sample_limit:
-                st.caption(f"Displaying {sample_limit:,} sample observations across 12 months for smooth animation playback.")
-                df_anim_sample = df_anim.sample(sample_limit, random_state=42)
-            else:
-                st.caption(f"Displaying all {len(df_anim):,} observations across 12 months.")
-                df_anim_sample = df_anim
-            
-            fig_anim_map = px.scatter_map(
-                df_anim_sample,
-                lat="latitude",
-                lon="longitude",
-                color="common_name",
-                animation_frame="occurrence_month",
-                category_orders={"occurrence_month": list(range(1, 13))},
-                hover_name="common_name",
-                map_style="open-street-map",
-                center=dict(lat=20, lon=0),
-                zoom=1.2,
-                opacity=0.7,
-                title="Animated Global Migration Across 12 Months"
-            )
-            fig_anim_map.update_traces(marker=dict(size=5))
-            fig_anim_map.update_layout(height=600, margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig_anim_map, use_container_width=True)
+        # User toggle guard: prevents heavy animation generation during rapid tab switching
+        activate_anim = st.toggle("Activate 12-Month Animation", value=False, help="Toggle on to generate and play the animated migration map")
+        
+        if activate_anim:
+            with st.spinner("Generating 12-month animation..."):
+                top_species_anim = filtered_df['common_name'].value_counts().head(6).index
+                df_anim = filtered_df[filtered_df['common_name'].isin(top_species_anim)].copy()
+                
+                if not df_anim.empty and 'occurrence_month' in df_anim:
+                    df_anim = df_anim.sort_values(by='occurrence_month')
+                    is_filtered = bool(selected_sp_display or selected_country != "All" or selected_year != "All")
+                    sample_limit = 6000 if is_filtered else 2500
+                    if len(df_anim) > sample_limit:
+                        st.caption(f"Displaying {sample_limit:,} sample observations across 12 months for smooth playback.")
+                        df_anim_sample = df_anim.sample(sample_limit, random_state=42)
+                    else:
+                        st.caption(f"Displaying all {len(df_anim):,} observations across 12 months.")
+                        df_anim_sample = df_anim
+                    
+                    fig_anim_map = px.scatter_map(
+                        df_anim_sample,
+                        lat="latitude",
+                        lon="longitude",
+                        color="common_name",
+                        animation_frame="occurrence_month",
+                        category_orders={"occurrence_month": list(range(1, 13))},
+                        hover_name="common_name",
+                        map_style="open-street-map",
+                        center=dict(lat=20, lon=0),
+                        zoom=1.2,
+                        opacity=0.7,
+                        title="Animated Global Migration Across 12 Months"
+                    )
+                    fig_anim_map.update_traces(marker=dict(size=5))
+                    fig_anim_map.update_layout(height=600, margin=dict(l=0, r=0, t=40, b=0))
+                    st.plotly_chart(fig_anim_map, use_container_width=True)
+                else:
+                    st.info("Insufficient temporal data for animation.")
         else:
-            st.info("Insufficient temporal data for animation.")
+            st.info("💡 Turn on the **Activate 12-Month Animation** toggle above to render the animated map.")
+        
+        gc.collect()
 
 
 # --- PAGE 3: DATA EXPLORER ---
