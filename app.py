@@ -282,7 +282,7 @@ if navigation == "Summary and dataset overview":
     if st.checkbox("Show Geographic & Temporal Data Tables"):
         gt_c1, gt_c2, gt_c3 = st.columns([1.1, 1, 1])
         with gt_c1:
-            table_country_df = top15_df[['country_name', 'country_code', 'Sightings']].rename(
+            table_country_df = top10_df[['country_name', 'country_code', 'Sightings']].rename(
                 columns={'country_name': 'Country Name', 'country_code': 'Country Code'}
             )
             st.dataframe(table_country_df, use_container_width=True)
